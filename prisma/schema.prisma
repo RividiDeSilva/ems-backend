@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id                 String @id @map("_id")
+  departmentLocation String
+  email              String @unique
+  password           String
+  role               String
+}
+
+model Notification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  createdAt DateTime @db.Date @default(now())
+  message   String
+  userID    String  // Employee receiving the notification
+  managerID String?  // Manager receiving the notification
+  read      Boolean  @default(false)
+}
+
+model Task {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  assignedById String
+  assignedToId String
+  completed    Boolean
+  description  String
+  dueDate      DateTime? @db.Date
+  frequency    String?
+  priority     String
+  status       String
+}
+
+model TeamMember {
+  id                 String    @id @map("_id")
+  appointmentDate    DateTime? @db.Date
+  callingName        String
+  contactAddress     String
+  dateOfBirth        DateTime  @db.Date
+  dateOfJoined       DateTime  @db.Date
+  departmentLocation String
+  email              String    @unique
+  employmentType     String
+  failedAttempts     BigInt
+  fullName           String
+  gender             String
+  lockUntil          Json?
+  managerID          String
+  nameWithInitials   String
+  nic                String    @unique
+  officeMobileNo     String
+  password           String
+  permanentAddress   String
+  permanentMobileNo  String
+  role               String
+  title              String
+  monthlyLeavesUsed   Float   @default(0)   // <-- changed to Float
+  totalLeavesUsed     Float   @default(0)
+  salesPersonCode    String    @unique
+}
+
+model SalesData {
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  saleDate           DateTime @db.Date
+  salesPersonCode    String
+  salesPersonName    String
+  netAmount          Float
+  cumulativeNetAmount Float    // <-- store running total
+  managerID          String
+  @@index([salesPersonCode, saleDate])
+}
+
+
+model Leave {
+  id                    String   @id @default(auto()) @map("_id") @db.ObjectId
+  userID                String
+  startDate             DateTime
+  endDate               DateTime
+  reason                String
+  typeOfLeave           String?
+  status                String   @default("Pending") // e.g. "Pending", "Approved", "Rejected"
+  createdAt             DateTime @default(now()) @db.Date
+  managerComments       String?
+  exceedCheckStatus     Boolean  @default(false) // True if monthlyLeavesUsed + dayCount > 4
+  exceedCheckedByManager Boolean @default(false) // Manager can mark as checked
+}
+
+model KPI {
+  id                   String   @id @default(auto()) @map("_id") @db.ObjectId
+  salesPersonName      String?
+  salesPersonCode      String
+  month                Int
+  year                 Int
+  punctuality          Float    @default(0)
+  discipline           Float    @default(0)
+  environment          Float    @default(0)
+  salesPerformance     Float    @default(0)
+  customerSatisfaction Float    @default(0)
+  totalScore           Float    @default(0)
+  feedback             String?
+  createdAt            DateTime @default(now()) @db.Date
+  updatedAt            DateTime @updatedAt
+
+  @@unique([salesPersonCode, year, month], name: "salesPersonCode_year_month")
+}
