@@ -258,11 +258,11 @@ leaveRouter.get(
   async (req, res) => {
     try {
       const userID = req.user.id;
-      const myLeaves = await prisma.leave.findMany({
-        where: { userID },
-        orderBy: { createdAt: "desc" },
+      const leaves = await prisma.leave.findMany({
+            where: { userID: req.user.id },
+            orderBy: { createdAt: "desc" },
       });
-      res.json(myLeaves);
+      res.json(leaves);
     } catch (error) {
       console.error("Error fetching user leaves:", error);
       res.status(500).json({ error: "Database error" });
@@ -274,23 +274,32 @@ leaveRouter.get(
  * Manager sees all leaves
  * GET /api/leaves
  */
+// Manager sees all leaves (Mongo-safe two‐step join)
 leaveRouter.get("/", authorize(["Showroom Manager"]), async (req, res) => {
   try {
-    const leaves = await prisma.leave.findMany({
-      orderBy: { createdAt: "desc" },
-    });
+    // 1) get raw leave records
+    const raw = await prisma.leave.findMany({ orderBy: { createdAt: "desc" } });
+
+    // 2) for each leave, fetch its user separately
+    const leaves = await Promise.all(raw.map(async lv => {
+      const user = await prisma.teamMember.findUnique({
+        where: { id: lv.userID },
+        select: { id: true, fullName: true, managerID: true }
+      });
+      return { ...lv, user };
+    }));
+
     res.json(leaves);
-  } catch (error) {
-    console.error("Error fetching leaves:", error);
+  } catch (err) {
+    console.error("Error fetching leaves:", err);
     res.status(500).json({ error: "Database error" });
   }
 });
-
 /**
  * GET /api/leaves/usage
  * Manager sees usage by month
  */
-leaveRouter.get("/usage", authorize(["Showroom Manager"]), async (req, res) => {
+leaveRouter.get("/usage", authorize(["Sales Assistant","Showroom Assistant Manager","Showroom Manager"]), async (req, res) => {
   try {
     const { employeeId } = req.query;
 

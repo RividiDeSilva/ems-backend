@@ -40,9 +40,6 @@ notificationRouter.get(
   }
 );
 
-
-
-// Mark a notification as read
 // Mark a notification as read
 notificationRouter.patch(
   "/:notificationId/read",
@@ -73,5 +70,46 @@ notificationRouter.patch(
     }
   }
 );
+
+  //  DELETE single notification
+  notificationRouter.delete(
+    "/:notificationId",
+    authorize(["Showroom Manager", "Sales Assistant", "Showroom Assistant Manager"]),
+    async (req, res) => {
+      const { notificationId } = req.params;
+      try {
+        await prisma.notification.delete({ where: { id: notificationId } });
+        return res.sendStatus(204);
+      } catch (err) {
+        console.error("Error deleting notification:", err);
+        return res.status(500).json({ error: "Could not delete" });
+      }
+    }
+  );
+
+  // → DELETE *all* for this user
+  notificationRouter.delete(
+    "/",
+    authorize(["Showroom Manager", "Sales Assistant", "Showroom Assistant Manager"]),
+    async (req, res) => {
+      try {
+        const readFilter = req.query.read;
+        const baseWhere = {
+        OR: [
+        { userID: String(req.user.id) },
+        { managerID: String(req.user.id) },
+        ],
+        };
+        const where = readFilter == null
+        ? baseWhere
+        : { AND: [ baseWhere, { read: readFilter === "true" } ] };
+        await prisma.notification.deleteMany({ where });
+        return res.sendStatus(204);
+      } catch (err) {
+        console.error("Error deleting all notifications:", err);
+        return res.status(500).json({ error: "Could not delete all" });
+      }
+    }
+  );
 
 export default notificationRouter;

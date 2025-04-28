@@ -59,7 +59,7 @@ model TeamMember {
   permanentMobileNo  String
   role               String
   title              String
-  monthlyLeavesUsed   Float   @default(0)   // <-- changed to Float
+  monthlyLeavesUsed   Float   @default(0)
   totalLeavesUsed     Float   @default(0)
   salesPersonCode    String    @unique
 }

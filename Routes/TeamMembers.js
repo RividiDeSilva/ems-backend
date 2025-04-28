@@ -1,6 +1,6 @@
 // Server/Routes/TeamMembers.js
 import express from "express";
-import prisma from "../utils/db.js"; // Your Prisma client
+import prisma from "../utils/db.js";
 import { authorize } from "../utils/authorize.js";
 
 const teamMembersRouter = express.Router();
@@ -20,17 +20,12 @@ teamMembersRouter.get(
         select: {
           id: true,
           fullName: true,
+          salesPersonCode: true,
           email: true,
           dateOfBirth: true,
           gender: true,
           contactAddress: true,
-          // Add more fields as needed:
-          // dateOfJoined: true,
-          // appointmentDate: true,
-          // role: true,
-          // permanentAddress: true,
-          // officeMobileNo: true,
-          // etc.
+
         },
       });
 

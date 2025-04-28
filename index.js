@@ -11,14 +11,15 @@ import profileRouter from "./Routes/ProfileRoute.js";
 import { authorize } from "./utils/authorize.js";
 import prisma from "./utils/db.js";        // Prisma client
 import TaskRouter from "./Routes/TaskRoute.js";
-import cron from "node-cron";             // node-cron for scheduling tasks
+import cron from "node-cron";
 import { Server } from "socket.io";
 import notificationRouter from "./Routes/NotificationsRoute.js";
 import { leaveRouter } from "./Routes/LeaveRoute.js";
 import { teamMembersRouter } from "./Routes/TeamMembers.js";
 import { kpiRouter } from "./Routes/KpiRoute.js";
 import { salesAnalysisRouter } from "./Routes/SalesAnalysis.js";
-
+import sqlite3 from "sqlite3";
+import { open } from "sqlite";
 
 
 dotenv.config();
@@ -27,10 +28,12 @@ const app = express();
 /* ---------------------- 1) CORS CONFIG ---------------------- */
 app.use(cors({
   origin: "http://localhost:5173",  // Your frontend origin
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   credentials: true,                // Allow cookies to be sent
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
+
+
 
 try {
   await prisma.$connect();
@@ -38,6 +41,7 @@ try {
 } catch (err) {
   console.error("❌ DB connection error in index.js:", err);
 }
+
 /* ---------------------- 2) TEST DB CONNECTION ---------------------- */
 async function testDBConnection() {
   try {
@@ -96,122 +100,90 @@ io.on("connection", (socket) => {
   });
 });
 
-/* ------------------------------------------------------------------
-   6) CRON JOB: Overdue & Repeating Tasks
-   Runs every day at midnight (00:00).
------------------------------------------------------------------- */
-cron.schedule("0 0 * * *", async () => {
-  try {
-    console.log("Running overdue & repeating check via node-cron...");
+app.get(
+  "/api/sales/available_dates",
+  authorize(),             // if you want this protected
+  async (req, res, next) => {
+    try {
+      const code = req.query.SalesPersonCode;
+      if (!code) return res.status(400).json({ error: "Missing SalesPersonCode" });
 
-    /* -------------- (A) Mark Overdue Tasks as 'Late' -------------- */
-    const overdueTasks = await prisma.task.findMany({
-      where: {
-        dueDate: { lt: new Date() },
-        status: { notIn: ["Completed", "Cancelled", "Late"] },
-      },
-    });
-
-    for (const task of overdueTasks) {
-      // 1) Update status to 'Late'
-      const updated = await prisma.task.update({
-        where: { id: task.id },
-        data: { status: "Late" },
+      // open the SQLite file
+      const db = await open({
+        filename: "./daily_forecast.db",
+        driver: sqlite3.Database
       });
 
-      // 2) Create a notification about being overdue
-      await prisma.notification.create({
-        data: {
-          message: `Task '${task.description}' assigned to #${task.assignedToId} is now OVERDUE!`,
-          userID: task.assignedToId, // The employee
-          managerID: task.assignedById, // The manager
-          read: false,
-        },
-      });
+      // fetch dates
+      const rows = await db.all(
+        "SELECT DATE FROM daily_forecast WHERE SalesPersonCode = ?",
+        code
+      );
+      await db.close();
 
-      // 3) Broadcast to front-end
-      const io = app.get("socketio");
-      io.emit("task-updated", updated);
+      // return just the date strings
+      res.json(rows.map(r => r.DATE));
+    } catch (err) {
+      next(err);
     }
+  }
+);
 
-    /* -------------- (B) Create Next Occurrence for Repeating Tasks -------------- */
-    // Only create a new occurrence if the task's due date is before today (i.e. it's due)
-    const tasksNeedingNext = await prisma.task.findMany({
-      where: {
-        frequency: { in: ["Daily", "Weekly", "Monthly"] },
-        dueDate: { lt: new Date(new Date().setHours(0, 0, 0, 0)) }
-      },
-    });
+  /* ------------------------------------------------------------------
+     CRON JOB: Overdue & Repeating Tasks (runs daily @ 00:00)
+  ------------------------------------------------------------------ */
+  cron.schedule("0 0 * * *", async () => {
+    console.log("🕛 cron: marking overdue + creating repeats…");
 
-    for (const oldTask of tasksNeedingNext) {
-      // Compute next due date based on current due date and frequency
-      const nextDue = getNextDueDate(oldTask.dueDate, oldTask.frequency);
+    const startOfToday = new Date();
+       startOfToday.setHours(0, 0, 0, 0);
+       await prisma.task.updateMany({
+         where: {
+           status:  "In Progress",
+           dueDate: { lt: startOfToday },
+         },
+         data: { status: "Late", completed: false },
+       });
 
-      // Append new due date label to description
-      const dateLabel = nextDue.toLocaleDateString();
-      const newDescription = `${oldTask.description} (${dateLabel})`;
-
-      // Create the new task occurrence
-      const newTask = await prisma.task.create({
-        data: {
-          description: newDescription,
-          assignedById: oldTask.assignedById,
-          assignedToId: oldTask.assignedToId,
-          dueDate: nextDue,
-          frequency: oldTask.frequency, // keep same frequency
-          priority: oldTask.priority,
-          completed: false,
-          status: "In Progress",
+    // for any repeating task whose dueDate < today, spawn the next one
+    const toRepeat = await prisma.task.findMany({
+        where: {
+          frequency: { in: ["Daily", "Weekly", "Monthly"] },
+          dueDate: { lt: startOfToday },
         },
       });
 
-      // Broadcast to front-end
-      const io = app.get("socketio");
-      io.emit("new-task", newTask);
-
-      // Notification to manager about the new occurrence
-      await prisma.notification.create({
+    for (let old of toRepeat) {
+      const nextDue = getNextDueDate(old.dueDate, old.frequency);
+      const newDesc = `${old.description} (${nextDue.toLocaleDateString()})`;
+      const created = await prisma.task.create({
         data: {
-          message: `Repeating task '${oldTask.description}' has a new occurrence: '${newDescription}'.`,
-          userID: oldTask.assignedById,
-          managerID: oldTask.assignedById,
-          read: false,
-        },
+          description:  newDesc,
+          assignedById: old.assignedById,
+          assignedToId: old.assignedToId,
+          dueDate:      nextDue,
+          frequency:    old.frequency,
+          priority:     old.priority,
+          completed:    false,
+          status:       "In Progress",
+        }
       });
-
-      console.log(`Created next occurrence from Task ${oldTask.id} -> ${newTask.id}`);
+      app.get("socketio").emit("new-task", created);
     }
-  } catch (error) {
-    console.error("❌ Error in overdue/repeating cron job:", error);
-  }
-});
+  });
 
 
-/* ---------------------- Helper: getNextDueDate ---------------------- */
-function getNextDueDate(currentDueDate, frequency) {
-  if (!currentDueDate) {
-    // If no dueDate, default to tomorrow
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow;
+  /** helper to compute the next due date for a repeating task */
+  function getNextDueDate(oldDate, freq) {
+    const d = oldDate ? new Date(oldDate) : new Date();
+    switch (freq) {
+      case "Daily":   d.setDate(d.getDate()+1); break;
+      case "Weekly":  d.setDate(d.getDate()+7); break;
+      case "Monthly": d.setMonth(d.getMonth()+1); break;
+    }
+    d.setHours(23, 59, 59, 999);
+    return d;
   }
-  const date = new Date(currentDueDate);
-
-  switch (frequency) {
-    case "Daily":
-      date.setDate(date.getDate() + 1);
-      break;
-    case "Weekly":
-      date.setDate(date.getDate() + 7);
-      break;
-    case "Monthly":
-      date.setMonth(date.getMonth() + 1);
-      break;
-    default:
-      break;
-  }
-  return date;
-}
 
 cron.schedule("0 0 28 * *", async () => {
   try {
@@ -282,6 +254,19 @@ function getAllYearMonthPairsUpToNow() {
   }
   return pairs;
 }
+
+// New cron:
+cron.schedule("0 0 1 * *", async () => {
+  try {
+    console.log("🔄 Resetting monthlyLeavesUsed counters for all users…");
+    await prisma.teamMember.updateMany({}, {
+      data: { monthlyLeavesUsed: 0 }
+    });
+    console.log("✅ monthlyLeavesUsed reset");
+  } catch (e) {
+    console.error("❌ Failed to reset monthlyLeavesUsed:", e);
+  }
+});
 
 /* ---------------------- 7) START SERVER ---------------------- */
 const PORT = process.env.PORT || 3000;

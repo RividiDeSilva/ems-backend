@@ -35,7 +35,7 @@ router.post("/employeelogin", async (req, res) => {
     if (!isMatch) {
       const updatedEmployee = await prisma.teamMember.update({
         where: { email },
-        data: { failedAttempts: Number(employee.failedAttempts) + 1 } // ✅ FIX: Convert BigInt to Number
+        data: { failedAttempts: Number(employee.failedAttempts) + 1 } // FIX: Convert BigInt to Number
       });
 
       // ✅ Lock the user only if they exceed 3 attempts AFTER the reset

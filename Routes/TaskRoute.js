@@ -21,13 +21,31 @@ TaskRouter.post("/tasks", authorize(["Showroom Manager"]), async (req, res) => {
     const createdTasks = [];
 
     for (const assignedTo of assignedToArray) {
+     const defaultDue = (() => {
+              const d = new Date();
+              // if user didn’t pick a time, but did pick a frequency → end of today
+              if (!dueDate && frequency) d.setHours(23, 59, 59, 999);
+              return d;
+            })();
       const newTask = await prisma.task.create({
         data: {
           description,
           assignedById: req.user.id,
           assignedToId: assignedTo,
-          // If a dueDate is provided, use it; otherwise, if a frequency is given, default to today's date (with time reset)
-          dueDate: dueDate ? new Date(dueDate) : (frequency ? new Date(new Date().setHours(0, 0, 0, 0)) : null),
+
+           // if user picked a date → use it;
+                    // otherwise if they picked a frequency → end of today;
+                    // else → null
+                    dueDate: dueDate
+                      ? new Date(dueDate)
+                      : frequency
+                        ? (() => {
+                            const d = new Date();
+                           d.setHours(23, 59, 59, 999);
+                            return d;
+                          })()
+                        : null,
+
           frequency: frequency || null,
           priority: priority || "Normal",
           completed: false,
@@ -129,6 +147,15 @@ TaskRouter.delete("/tasks/:taskId", authorize(["Showroom Manager"]), async (req,
  */
 TaskRouter.get("/tasks", authorize(["Showroom Manager"]), async (req, res) => {
   try {
+    const startOfToday = new Date();
+       startOfToday.setHours(0,0,0,0);
+        await prisma.task.updateMany({
+          where: {
+            status: "In Progress",
+            dueDate: { not: null, lt: startOfToday }
+          },
+          data: { status: "Late", completed: false }
+        });
     const tasks = await prisma.task.findMany({
       where: { assignedById: req.user.id },
     });
@@ -144,6 +171,16 @@ TaskRouter.get("/tasks", authorize(["Showroom Manager"]), async (req, res) => {
  */
 TaskRouter.get("/tasks/assigned", authorize(["Sales Assistant"]), async (req, res) => {
   try {
+     // mark anything due < start of today as late
+     const startOfToday = new Date();
+     startOfToday.setHours(0,0,0,0);
+     await prisma.task.updateMany({
+       where: {
+         status: "In Progress",
+         dueDate: { not: null, lt: startOfToday }
+       },
+       data: { status: "Late", completed: false }
+     });
     const tasks = await prisma.task.findMany({
       where: { assignedToId: req.user.id },
     });
